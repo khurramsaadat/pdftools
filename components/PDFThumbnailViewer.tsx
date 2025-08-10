@@ -233,9 +233,9 @@ export default function PDFThumbnailViewer({ files, onPagesSelected }: PDFThumbn
 
     try {
       const result = await generateThumbnail(file.file, page.pageNumber, {
-        scale: 1.0,
-        width: 200,
-        height: 280
+        scale: 0.8,
+        width: 160,
+        height: 220
       })
 
       if (result.success && result.thumbnail) {
@@ -259,6 +259,20 @@ export default function PDFThumbnailViewer({ files, onPagesSelected }: PDFThumbn
       ))
     }
   }, [pages, files])
+
+  // Auto-generate thumbnails for first few pages immediately (no lazy loading)
+  useEffect(() => {
+    if (pages.length === 0) return
+
+    // Generate thumbnails for first 3 pages of each file immediately
+    const autoGeneratePages = pages.slice(0, Math.min(pages.length, 6))
+    
+    autoGeneratePages.forEach(page => {
+      if (!page.thumbnail && !page.isLoading && !page.error) {
+        handlePageVisible(page.id)
+      }
+    })
+  }, [pages, handlePageVisible])
 
   const setThumbnailRef = useCallback((pageId: string, element: HTMLDivElement | null) => {
     thumbnailRefs.current[pageId] = element
@@ -309,7 +323,7 @@ export default function PDFThumbnailViewer({ files, onPagesSelected }: PDFThumbn
         }`}
         onClick={() => !page.isLoading && togglePageSelection(page.id)}
       >
-        <div className="relative w-48 h-64 bg-gray-100 rounded-lg border border-gray-200 overflow-hidden">
+        <div className="relative w-40 h-52 bg-gray-100 rounded-lg border border-gray-200 overflow-hidden">
           {page.isLoading ? (
             <div className="w-full h-full flex flex-col items-center justify-center">
               <FiLoader className="h-8 w-8 text-orange-500 animate-spin mb-2" />

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState, useRef, useCallback } from 'react'
+import { mergePDFs, mergeSelectedPages } from '@/utils/pdfMerger'
 import { 
   FiArrowLeft, 
   FiUpload, 
@@ -45,6 +46,8 @@ export default function MergePDFPage() {
   const [outputFilename, setOutputFilename] = useState('merged-document')
   const [isDragOver, setIsDragOver] = useState(false)
   const [debugMode, setDebugMode] = useState(false)
+  const [isMerging, setIsMerging] = useState(false)
+  const [mergeStatus, setMergeStatus] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const formatFileSize = (bytes: number): string => {
@@ -122,6 +125,86 @@ export default function MergePDFPage() {
     setSelectedPages(pages)
   }
 
+  const handleMergeSelectedPages = async () => {
+    if (selectedPages.length === 0) return
+
+    setIsMerging(true)
+    setMergeStatus('Preparing selected pages for merge...')
+
+    try {
+      // Group selected pages by file
+      const pageSelections = selectedFiles.map(file => {
+        const filePagesSelected = selectedPages
+          .filter(page => page.fileId === file.id)
+          .map(page => page.pageNumber)
+        
+        return {
+          file: file.file,
+          pageNumbers: filePagesSelected
+        }
+      }).filter(selection => selection.pageNumbers.length > 0)
+
+      setMergeStatus(`Merging ${selectedPages.length} selected pages...`)
+
+      const result = await mergeSelectedPages(pageSelections, {
+        filename: outputFilename
+      })
+
+      if (result.success) {
+        setMergeStatus(`✅ Successfully merged ${selectedPages.length} pages! Download started.`)
+        setTimeout(() => setMergeStatus(''), 3000)
+      } else {
+        setMergeStatus(`❌ Error: ${result.error}`)
+        setTimeout(() => setMergeStatus(''), 5000)
+      }
+    } catch (error: any) {
+      setMergeStatus(`❌ Error: ${error.message || 'Unknown error occurred'}`)
+      setTimeout(() => setMergeStatus(''), 5000)
+    } finally {
+      setIsMerging(false)
+    }
+  }
+
+  const handleMergeAllPages = async (showConfirmation = false) => {
+    if (selectedFiles.length === 0) return
+
+    const totalPages = selectedFiles.reduce((sum, file) => sum + file.pages, 0)
+    
+    if (showConfirmation && selectedPages.length > 0) {
+      const confirmMergeAll = window.confirm(
+        `You have ${selectedPages.length} page${selectedPages.length > 1 ? 's' : ''} selected.\n\n` +
+        `Click OK to merge ALL ${totalPages} pages from all files instead, or Cancel to merge only selected pages.`
+      )
+      if (!confirmMergeAll) return
+    }
+
+    setIsMerging(true)
+    setMergeStatus(`Preparing all ${totalPages} pages for merge...`)
+
+    try {
+      const filesToMerge = selectedFiles.map(file => file.file)
+      
+      setMergeStatus(`Merging all ${totalPages} pages from ${selectedFiles.length} files...`)
+
+      const result = await mergePDFs(filesToMerge, {
+        filename: outputFilename
+      })
+
+      if (result.success) {
+        setMergeStatus(`✅ Successfully merged all ${totalPages} pages! Download started.`)
+        setTimeout(() => setMergeStatus(''), 3000)
+      } else {
+        setMergeStatus(`❌ Error: ${result.error}`)
+        setTimeout(() => setMergeStatus(''), 5000)
+      }
+    } catch (error: any) {
+      setMergeStatus(`❌ Error: ${error.message || 'Unknown error occurred'}`)
+      setTimeout(() => setMergeStatus(''), 5000)
+    } finally {
+      setIsMerging(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-900">
       <Navbar />
@@ -165,7 +248,7 @@ export default function MergePDFPage() {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
-              onClick={handleFileSelect}
+              onClick={selectedFiles.length === 0 ? handleFileSelect : undefined}
             >
               <input
                 ref={fileInputRef}
@@ -182,35 +265,123 @@ export default function MergePDFPage() {
               </h3>
               <p className="text-gray-500 mb-2">Supports: .pdf files only</p>
               
-              {/* Selected Files */}
               {selectedFiles.length > 0 && (
-                <div className="mt-6">
-                  <h4 className="text-sm font-medium text-gray-600 mb-3">
-                    Selected Files ({selectedFiles.length}):
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleFileSelect()
+                  }}
+                  className="mt-4 inline-flex items-center px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-lg hover:bg-orange-700 transition-colors"
+                >
+                  <FiUpload className="h-4 w-4 mr-2" />
+                  Add More Files
+                </button>
+              )}
+            </div>
+
+            {/* File Order & Analysis - Integrated */}
+            {selectedFiles.length > 0 && (
+              <div className="mt-8 border-t pt-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h4 className="text-lg font-semibold text-gray-700 flex items-center">
+                    <FiMove className="h-5 w-5 mr-2" />
+                    File Order & Analysis ({selectedFiles.length} files)
                   </h4>
-                  <div className="space-y-2">
-                    {selectedFiles.map((file) => (
-                      <div key={file.id} className="flex items-center justify-between bg-white rounded-lg border px-4 py-2 text-left">
-                        <div className="flex items-center">
-                          <FiFile className="h-4 w-4 text-red-500 mr-2" />
-                          <span className="text-sm text-gray-700">{file.name}</span>
-                          <span className="text-xs text-gray-500 ml-2">({file.size})</span>
+                  <div className="text-sm text-gray-500">
+                    Total: {selectedFiles.reduce((acc, file) => acc + file.pages, 0)} pages • {selectedFiles.reduce((acc, file) => acc + file.sizeBytes, 0) > 1024 * 1024 ? 
+                      `${(selectedFiles.reduce((acc, file) => acc + file.sizeBytes, 0) / (1024 * 1024)).toFixed(1)} MB` :
+                      `${(selectedFiles.reduce((acc, file) => acc + file.sizeBytes, 0) / 1024).toFixed(0)} KB`}
+                  </div>
+                </div>
+                
+                <div className="space-y-3">
+                  {selectedFiles.map((file, index) => (
+                    <div key={file.id} className="flex items-center justify-between bg-gray-50 rounded-lg border-2 border-gray-200 px-4 py-4 hover:border-orange-300 transition-colors">
+                      <div className="flex items-center flex-1">
+                        <div className="bg-orange-100 text-orange-600 rounded-full w-8 h-8 flex items-center justify-center text-sm font-bold mr-4 min-w-[2rem]">
+                          {index + 1}
                         </div>
+                        <FiMove className="h-5 w-5 text-gray-400 mr-3 cursor-move" />
+                        <FiFile className="h-5 w-5 text-red-500 mr-3" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-800 truncate">{file.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {file.pages} pages • {file.size} • Added: {new Date().toLocaleTimeString()}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center space-x-2 ml-4">
+                        <button 
+                          onClick={() => moveFile(index, Math.max(0, index - 1))}
+                          disabled={index === 0}
+                          className="p-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg hover:bg-gray-200 transition-colors"
+                          title="Move up"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button 
+                          onClick={() => moveFile(index, Math.min(selectedFiles.length - 1, index + 1))}
+                          disabled={index === selectedFiles.length - 1}
+                          className="p-2 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg hover:bg-gray-200 transition-colors"
+                          title="Move down"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            removeFile(file.id)
-                          }}
-                          className="text-gray-400 hover:text-red-500 transition-colors"
+                          onClick={() => removeFile(file.id)}
+                          className="p-2 text-gray-400 hover:text-red-500 transition-colors rounded-lg hover:bg-red-50"
+                          title="Remove file"
                         >
                           <FiX className="h-4 w-4" />
                         </button>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              )}
-            </div>
+
+                {/* Quick Actions */}
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <button
+                    onClick={() => {
+                      const reversed = [...selectedFiles].reverse()
+                      setSelectedFiles(reversed)
+                    }}
+                    className="inline-flex items-center px-3 py-2 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    ↕️ Reverse Order
+                  </button>
+                  <button
+                    onClick={() => {
+                      const sorted = [...selectedFiles].sort((a, b) => a.name.localeCompare(b.name))
+                      setSelectedFiles(sorted)
+                    }}
+                    className="inline-flex items-center px-3 py-2 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    🔤 Sort A-Z
+                  </button>
+                  <button
+                    onClick={() => {
+                      const sorted = [...selectedFiles].sort((a, b) => a.sizeBytes - b.sizeBytes)
+                      setSelectedFiles(sorted)
+                    }}
+                    className="inline-flex items-center px-3 py-2 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors"
+                  >
+                    📊 Sort by Size
+                  </button>
+                  <button
+                    onClick={() => setSelectedFiles([])}
+                    className="inline-flex items-center px-3 py-2 bg-red-100 text-red-700 text-xs font-medium rounded-lg hover:bg-red-200 transition-colors"
+                  >
+                    🗑️ Clear All
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Debug Info */}
@@ -275,59 +446,6 @@ export default function MergePDFPage() {
                 Professional Features
               </span>
             </div>
-
-            {/* File Order & Analysis */}
-            {selectedFiles.length > 0 && (
-              <div className="mb-8">
-                <h4 className="text-lg font-semibold text-gray-700 mb-4 flex items-center">
-                  <FiMove className="h-4 w-4 mr-2" />
-                  File Order & Analysis
-                </h4>
-                
-                <div className="space-y-3">
-                  {selectedFiles.map((file, index) => (
-                    <div key={file.id} className="flex items-center justify-between bg-gray-50 rounded-lg border px-4 py-3">
-                      <div className="flex items-center">
-                        <div className="bg-orange-100 text-orange-600 rounded-full w-6 h-6 flex items-center justify-center text-sm font-medium mr-3">
-                          {index + 1}
-                        </div>
-                        <FiMove className="h-4 w-4 text-gray-400 mr-3 cursor-move" />
-                        <FiFile className="h-4 w-4 text-red-500 mr-2" />
-                        <div>
-                          <div className="text-sm font-medium text-gray-700">{file.name}</div>
-                          <div className="text-xs text-gray-500">{file.pages} pages • {file.size}</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <button 
-                          onClick={() => moveFile(index, Math.max(0, index - 1))}
-                          disabled={index === 0}
-                          className="text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Move up"
-                        >
-                          ↑
-                        </button>
-                        <button 
-                          onClick={() => moveFile(index, Math.min(selectedFiles.length - 1, index + 1))}
-                          disabled={index === selectedFiles.length - 1}
-                          className="text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Move down"
-                        >
-                          ↓
-                        </button>
-                        <button
-                          onClick={() => removeFile(file.id)}
-                          className="text-gray-400 hover:text-red-500 transition-colors"
-                          title="Remove file"
-                        >
-                          <FiX className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Merge Settings */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
@@ -396,17 +514,66 @@ export default function MergePDFPage() {
 
             {/* Apply Button */}
             {selectedFiles.length > 0 ? (
-              selectedPages.length > 0 ? (
-                <button className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center">
-                  <FiCheckCircle className="h-5 w-5 mr-2" />
-                  Merge {selectedPages.length} Selected Page{selectedPages.length > 1 ? 's' : ''}
+              <div className="space-y-4">
+                {selectedPages.length > 0 ? (
+                  <button 
+                    onClick={handleMergeSelectedPages}
+                    disabled={isMerging}
+                    className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center disabled:cursor-not-allowed"
+                  >
+                    {isMerging ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                        Merging...
+                      </>
+                    ) : (
+                      <>
+                        <FiCheckCircle className="h-5 w-5 mr-2" />
+                        Merge {selectedPages.length} Selected Page{selectedPages.length > 1 ? 's' : ''}
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-center py-4">
+                      <FiInfo className="h-6 w-6 text-gray-400 mx-auto mb-2" />
+                      <p className="text-gray-500 text-sm">No pages selected - you can select specific pages above or merge all pages</p>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Always show merge all option */}
+                <button 
+                  onClick={() => handleMergeAllPages(selectedPages.length > 0)}
+                  disabled={isMerging}
+                  className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl flex items-center justify-center disabled:cursor-not-allowed"
+                >
+                  {isMerging ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                      Merging...
+                    </>
+                  ) : (
+                    <>
+                      <FiLayers className="h-5 w-5 mr-2" />
+                      Merge All Pages ({selectedFiles.reduce((sum, file) => sum + file.pages, 0)} total)
+                    </>
+                  )}
                 </button>
-              ) : (
-                <div className="text-center py-8">
-                  <FiInfo className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">Select pages from the previews above to start merging</p>
-                </div>
-              )
+                
+                {/* Merge Status Display */}
+                {mergeStatus && (
+                  <div className={`p-4 rounded-lg text-center text-sm font-medium ${
+                    mergeStatus.includes('✅') 
+                      ? 'bg-green-50 border border-green-200 text-green-800'
+                      : mergeStatus.includes('❌')
+                      ? 'bg-red-50 border border-red-200 text-red-800'
+                      : 'bg-blue-50 border border-blue-200 text-blue-800'
+                  }`}>
+                    {mergeStatus}
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="text-center py-8">
                 <FiUpload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
